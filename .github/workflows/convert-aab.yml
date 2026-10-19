@@ -1,10 +1,10 @@
-name: Convert AAB to APK
+name: Convert AAB to arm64 APK
 
 on:
   workflow_dispatch:
     inputs:
       aab_url:
-        description: "URL of the official Fressh AAB (leave empty for default 0.1.1)"
+        description: "URL of the official Fressh AAB (empty = default 0.1.1)"
         required: false
         default: ""
       create_release:
@@ -13,9 +13,9 @@ on:
         type: boolean
         default: true
       tag_name:
-        description: "Release tag (e.g. v0.1.1-apk)"
+        description: "Release tag (e.g. v0.1.1-arm64)"
         required: false
-        default: "v0.1.1-apk"
+        default: "v0.1.1-arm64"
 
 permissions:
   contents: write
@@ -33,10 +33,24 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Install Android build-tools (zipalign + apksigner)
+        uses: android-actions/setup-android@v3
+
+      - name: Accept licenses & install build-tools
+        run: |
+          sdkmanager --install "build-tools;34.0.0"
+          # Expose for the script
+          echo "BUILD_TOOLS_DIR=${ANDROID_HOME}/build-tools/34.0.0" >> "$GITHUB_ENV"
+
       - name: Make script executable
         run: chmod +x scripts/convert.sh
 
-      - name: Convert AAB → universal APK
+      - name: Convert AAB → arm64-v8a release APK
+        env:
+          # Optional: set these as repo secrets for a stable signing key across releases
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS || 'fressh-sideload' }}
+          KEY_PASS: ${{ secrets.KEY_PASS || 'fressh-sideload' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'fressh' }}
         run: |
           if [ -n "${{ inputs.aab_url }}" ]; then
             ./scripts/convert.sh "${{ inputs.aab_url }}"
@@ -47,8 +61,8 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fressh-universal-apk
-          path: out/fressh-universal.apk
+          name: fressh-arm64-v8a-release
+          path: out/fressh-arm64-v8a-release.apk
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -56,15 +70,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag_name }}
-          name: Fressh universal APK (${{ inputs.tag_name }})
+          name: Fressh arm64-v8a release APK (${{ inputs.tag_name }})
           body: |
-            Unofficial universal APK converted from the official Fressh AAB via Google bundletool (`--mode=universal`).
+            Unofficial **arm64-v8a only** APK converted from the official Fressh AAB.
 
-            - Source project: https://github.com/EthanShoeDev/fressh
-            - Signed with debug keystore (for sideloading only)
-            - Prefer the official Google Play closed test when possible: https://fressh.dev/
+            - Source: https://github.com/EthanShoeDev/fressh
+            - Only `lib/arm64-v8a` is kept (smaller than universal)
+            - Signed with a release-style keystore (sideload; **not** the Play Store key)
+            - Prefer official closed testing when possible: https://fressh.dev/
 
-            **This repository is not affiliated with the Fressh authors.**
-          files: out/fressh-universal.apk
+            **Not affiliated with the Fressh authors.**
+          files: out/fressh-arm64-v8a-release.apk
           draft: false
           prerelease: true

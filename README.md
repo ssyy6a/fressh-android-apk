@@ -1,69 +1,60 @@
-# Fressh Android APK (Unofficial)
+# Fressh Android APK (Unofficial) — arm64 only
 
 > **Not affiliated with the official Fressh project.**  
-> This repository only converts the official Android App Bundle (`.aab`) published by [EthanShoeDev/fressh](https://github.com/EthanShoeDev/fressh) into a single **universal APK** that can be sideloaded.
+> Converts the official [EthanShoeDev/fressh](https://github.com/EthanShoeDev/fressh) **AAB** into a single **arm64-v8a release APK** for sideloading.
 
-Official Fressh currently ships Android builds mainly as **AAB** (for Google Play closed testing). Many users prefer a direct `.apk` for sideloading. This repo automates that conversion with Google’s official `bundletool`.
+## Output
+
+| File | Description |
+|------|-------------|
+| `fressh-arm64-v8a-release.apk` | One APK, **only arm64-v8a** native libs, release-style signed |
+
+Most modern phones are arm64. This is smaller than a universal (all-ABI) APK.
 
 ## Download
 
-Go to **[Releases](https://github.com/ssyy6a/fressh-android-apk/releases)** and download the latest `fressh-universal.apk`.
+1. Open **[Actions](https://github.com/ssyy6a/fressh-android-apk/actions)** → **Convert AAB to arm64 APK** → **Run workflow**
+2. Or download from **[Releases](https://github.com/ssyy6a/fressh-android-apk/releases)** after a run finishes
 
-Or trigger the workflow yourself (see below).
-
-## How it works
-
-1. Download the official AAB from the Fressh release assets (default: `@fressh/mobile@0.1.1`).
-2. Run Google `bundletool` with `--mode=universal` to produce one APK that contains all ABIs.
-3. The resulting APK is signed with a **debug keystore** (fine for personal sideloading; not for Play Store).
-
-Official source AAB example:
+Default source AAB:
 
 ```
 https://github.com/EthanShoeDev/fressh/releases/download/%40fressh%2Fmobile%400.1.1/fressh-android.aab
 ```
 
-## Local conversion (Linux / macOS / WSL)
+## How it works
 
-Requirements:
-- Java 11+
-- `curl` / `wget`
-- `unzip`
+1. `bundletool build-apks --mode=universal` → intermediate single APK  
+2. Unzip and **delete** `lib/armeabi-v7a`, `lib/x86`, `lib/x86_64`, … keep only `lib/arm64-v8a`  
+3. `zipalign` + `apksigner` with a release keystore (generated or from secrets)
+
+## Local build
+
+Needs: Java 17+, Android **build-tools** (`zipalign`, `apksigner`), `curl`, `unzip`, `zip`.
 
 ```bash
 chmod +x scripts/convert.sh
+export ANDROID_HOME=~/Android/Sdk   # or your SDK path
 ./scripts/convert.sh
-# or point to a local .aab:
-./scripts/convert.sh /path/to/fressh-android.aab
+# → out/fressh-arm64-v8a-release.apk
 ```
 
-Output: `out/fressh-universal.apk`
+Optional signing env:
 
-## GitHub Actions
+```bash
+export KEYSTORE_PATH=./my.keystore
+export KEYSTORE_PASS=...
+export KEY_ALIAS=...
+export KEY_PASS=...
+```
 
-The workflow [`.github/workflows/convert-aab.yml`](.github/workflows/convert-aab.yml):
+## Notes
 
-- Can be run manually (`workflow_dispatch`)
-- Accepts optional AAB download URL
-- Uploads the universal APK as a workflow artifact
-- Optionally creates a GitHub Release with the APK attached
-
-### Manual run
-
-1. Open **Actions** → **Convert AAB to APK**
-2. Click **Run workflow**
-3. (Optional) paste a different AAB URL
-4. Download the artifact or the Release asset
-
-## Disclaimer
-
-- This is an **unofficial** convenience packaging.
-- The binary content comes from the official Fressh AAB; only the packaging format is changed.
-- APK is signed with a debug key → Android will show “Unknown sources / debug signed”.
-- Prefer the official Google Play closed test when possible: https://fressh.dev/
-- MIT-licensed original project; this conversion tooling is also under MIT.
+- App content is the official release AAB; only packaging/ABI/signing change.
+- Signing key is **not** Google Play’s key → install as unknown source; updates from Play won’t match this signature.
+- 32-bit-only devices cannot install this APK.
+- Prefer official Play closed test: https://fressh.dev/
 
 ## License
 
-- Conversion scripts & workflow: MIT
-- Fressh application itself: MIT (see upstream)
+Scripts & workflow: MIT · Fressh app: MIT (upstream)

@@ -3,4 +3,5 @@ out/
 *.apks
 *.apk
 *.jar
+*.keystore
 .DS_Store
