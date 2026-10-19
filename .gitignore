@@ -1,0 +1,6 @@
+out/
+*.aab
+*.apks
+*.apk
+*.jar
+.DS_Store

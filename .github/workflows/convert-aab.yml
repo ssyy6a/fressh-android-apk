@@ -1,0 +1,70 @@
+name: Convert AAB to APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      aab_url:
+        description: "URL of the official Fressh AAB (leave empty for default 0.1.1)"
+        required: false
+        default: ""
+      create_release:
+        description: "Create a GitHub Release with the APK?"
+        required: false
+        type: boolean
+        default: true
+      tag_name:
+        description: "Release tag (e.g. v0.1.1-apk)"
+        required: false
+        default: "v0.1.1-apk"
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Make script executable
+        run: chmod +x scripts/convert.sh
+
+      - name: Convert AAB → universal APK
+        run: |
+          if [ -n "${{ inputs.aab_url }}" ]; then
+            ./scripts/convert.sh "${{ inputs.aab_url }}"
+          else
+            ./scripts/convert.sh
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fressh-universal-apk
+          path: out/fressh-universal.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          name: Fressh universal APK (${{ inputs.tag_name }})
+          body: |
+            Unofficial universal APK converted from the official Fressh AAB via Google bundletool (`--mode=universal`).
+
+            - Source project: https://github.com/EthanShoeDev/fressh
+            - Signed with debug keystore (for sideloading only)
+            - Prefer the official Google Play closed test when possible: https://fressh.dev/
+
+            **This repository is not affiliated with the Fressh authors.**
+          files: out/fressh-universal.apk
+          draft: false
+          prerelease: true
