@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Convert official Fressh AAB → single arm64-v8a release APK
 #
-# 1) bundletool --mode=universal
-# 2) strip non-arm64 native libs
-# 3) zipalign + apksigner
+# Critical: native .so must be stored UNCOMPRESSED in the APK, otherwise
+# install fails with:
+#   INSTALL_FAILED_INVALID_APK: Failed to extract native libraries, res=-2
 #
 # Usage: ./scripts/convert.sh [path-or-url-to.aab]
 
@@ -68,18 +68,58 @@ if [[ -d "${STRIPPED_DIR}/lib" ]]; then
   find "${STRIPPED_DIR}/lib" -mindepth 1 -maxdepth 1 -type d ! -name 'arm64-v8a' -exec rm -rf {} +
   if [[ -d "${STRIPPED_DIR}/lib/arm64-v8a" ]]; then
     echo "    kept: lib/arm64-v8a"
-    ls -la "${STRIPPED_DIR}/lib/" || true
+    ls -la "${STRIPPED_DIR}/lib/arm64-v8a/" | head -20 || true
   else
     echo "Warning: no lib/arm64-v8a found" >&2
   fi
 fi
 
+# Drop old signature; we re-sign later
 rm -rf "${STRIPPED_DIR}/META-INF"
 
+echo "==> Re-packing APK (.so stored UNCOMPRESSED)..."
+rm -f "${STRIPPED_APK}"
 (
   cd "${STRIPPED_DIR}"
-  zip -qr "${STRIPPED_APK}" .
+  # 1) Everything except .so — normal compression
+  # 2) .so files — store only (-0), required by Android package manager
+  mapfile -t NON_SO < <(find . -type f ! -name '*.so' | sort)
+  mapfile -t SO_FILES < <(find . -type f -name '*.so' | sort)
+
+  if ((${#NON_SO[@]})); then
+    zip -q -X "${STRIPPED_APK}" "${NON_SO[@]}"
+  else
+    # ensure zip exists
+    zip -q -X "${STRIPPED_APK}" -r . -i 'META-INF/*' 2>/dev/null || true
+    touch empty_placeholder
+    zip -q -X "${STRIPPED_APK}" empty_placeholder
+    zip -q -d "${STRIPPED_APK}" empty_placeholder || true
+    rm -f empty_placeholder
+  fi
+
+  if ((${#SO_FILES[@]})); then
+    # -0 = store (no compression), -X = no extra fields
+    zip -q -0 -X "${STRIPPED_APK}" "${SO_FILES[@]}"
+  fi
 )
+
+# Sanity: every .so in the zip must use method 0 (stored)
+echo "==> Verifying .so compression method (must be 0/stored)..."
+if command -v zipinfo >/dev/null 2>&1; then
+  BAD="$(zipinfo -1 "${STRIPPED_APK}" 'lib/*/*.so' 2>/dev/null | while read -r f; do
+    method="$(zipinfo -v "${STRIPPED_APK}" "$f" 2>/dev/null | awk '/compression method/{print $3; exit}')"
+    # zipinfo may print "stored" or numeric
+    if [[ -n "$method" && "$method" != "stored" && "$method" != "0" && "$method" != "none" ]]; then
+      echo "$f method=$method"
+    fi
+  done || true)"
+  if [[ -n "${BAD}" ]]; then
+    echo "ERROR: compressed .so detected:" >&2
+    echo "${BAD}" >&2
+    exit 1
+  fi
+  echo "    all .so entries are stored (uncompressed)"
+fi
 
 ZIPALIGN=""
 APKSIGNER=""
@@ -107,8 +147,14 @@ if [[ -z "${ZIPALIGN}" || -z "${APKSIGNER}" ]]; then
   exit 1
 fi
 
-echo "==> zipalign (${ZIPALIGN})..."
-"${ZIPALIGN}" -f 4 "${STRIPPED_APK}" "${ALIGNED_APK}"
+# Page-align shared libraries (4KB; use -P 16 on newer build-tools for 16KB pages)
+echo "==> zipalign (page-align native libs)..."
+if "${ZIPALIGN}" -h 2>&1 | grep -q -- '-P'; then
+  "${ZIPALIGN}" -f -P 16 4 "${STRIPPED_APK}" "${ALIGNED_APK}" 2>/dev/null \
+    || "${ZIPALIGN}" -f -p 4 "${STRIPPED_APK}" "${ALIGNED_APK}"
+else
+  "${ZIPALIGN}" -f -p 4 "${STRIPPED_APK}" "${ALIGNED_APK}"
+fi
 
 KEYSTORE_PATH="${KEYSTORE_PATH:-${OUT_DIR}/fressh-release.keystore}"
 KEYSTORE_PASS="${KEYSTORE_PASS:-fressh-sideload}"
@@ -128,18 +174,21 @@ if [[ ! -f "${KEYSTORE_PATH}" ]]; then
     -dname "CN=Fressh Sideload, OU=Unofficial, O=ssyy6a, L=Unknown, ST=Unknown, C=US"
 fi
 
-echo "==> apksigner..."
+echo "==> apksigner (v2/v3)..."
 "${APKSIGNER}" sign \
   --ks "${KEYSTORE_PATH}" \
   --ks-key-alias "${KEY_ALIAS}" \
   --ks-pass "pass:${KEYSTORE_PASS}" \
   --key-pass "pass:${KEY_PASS}" \
+  --v1-signing-enabled true \
+  --v2-signing-enabled true \
+  --v3-signing-enabled true \
   --out "${FINAL_APK}" \
   "${ALIGNED_APK}"
 
 "${APKSIGNER}" verify --verbose "${FINAL_APK}"
 
 echo
-echo "Done (arm64-v8a only, release-signed)."
+echo "Done (arm64-v8a only, .so uncompressed, release-signed)."
 echo "  APK : ${FINAL_APK}"
 ls -lh "${FINAL_APK}"
