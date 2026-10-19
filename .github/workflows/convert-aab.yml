@@ -33,25 +33,48 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Do NOT use android-actions/setup-android — it tries to install obsolete package "tools"
+      # and fails with: Failed to find package 'tools'
       - name: Install Android build-tools (zipalign + apksigner)
-        uses: android-actions/setup-android@v3
-
-      - name: Accept licenses & install build-tools
         run: |
-          sdkmanager --install "build-tools;34.0.0"
-          # Expose for the script
-          echo "BUILD_TOOLS_DIR=${ANDROID_HOME}/build-tools/34.0.0" >> "$GITHUB_ENV"
+          set -euo pipefail
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [[ ! -d "$ANDROID_HOME/cmdline-tools" ]]; then
+            # Fallback: minimal cmdline-tools if runner image has none
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            cd /tmp
+            curl -fsSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+            mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          fi
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/cmdline-tools/16.0/bin:$PATH"
+          # Prefer whichever sdkmanager exists
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [[ -z "$SDKMANAGER" ]]; then
+            for p in "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager; do
+              [[ -x "$p" ]] && SDKMANAGER="$p" && break
+            done
+          fi
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "build-tools;34.0.0"
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "BUILD_TOOLS_DIR=$BT" >> "$GITHUB_ENV"
+          echo "Installed build-tools at $BT"
 
       - name: Make script executable
         run: chmod +x scripts/convert.sh
 
       - name: Convert AAB → arm64-v8a release APK
         env:
-          # Optional: set these as repo secrets for a stable signing key across releases
-          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS || 'fressh-sideload' }}
-          KEY_PASS: ${{ secrets.KEY_PASS || 'fressh-sideload' }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'fressh' }}
+          KEYSTORE_PASS: fressh-sideload
+          KEY_PASS: fressh-sideload
+          KEY_ALIAS: fressh
         run: |
+          set -euo pipefail
           if [ -n "${{ inputs.aab_url }}" ]; then
             ./scripts/convert.sh "${{ inputs.aab_url }}"
           else
@@ -75,8 +98,8 @@ jobs:
             Unofficial **arm64-v8a only** APK converted from the official Fressh AAB.
 
             - Source: https://github.com/EthanShoeDev/fressh
-            - Only `lib/arm64-v8a` is kept (smaller than universal)
-            - Signed with a release-style keystore (sideload; **not** the Play Store key)
+            - Only `lib/arm64-v8a` is kept
+            - Signed with a release-style keystore (sideload only; not Play Store key)
             - Prefer official closed testing when possible: https://fressh.dev/
 
             **Not affiliated with the Fressh authors.**
